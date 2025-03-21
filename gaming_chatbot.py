@@ -36,7 +36,9 @@ from data import (
     translations,
     reasoning_rules,
     intent_patterns,
-    synonyms
+    synonyms,
+    platform_sections,
+    platform_faqs
 )
 
 # Download required NLTK data
@@ -57,6 +59,31 @@ nltk.download('corpora')
 
 class GamingChatbot:
     def __init__(self):
+        """Initialize the chatbot with necessary data"""
+        from data import (games_data, challenges, game_vocabulary,
+                        navigation_guides, platform_sections, platform_faqs,
+                        faqs, translations, reasoning_rules, intent_patterns,
+                        synonyms)
+        
+        self.games_data = games_data
+        self.challenges = challenges
+        self.game_vocabulary = game_vocabulary
+        self.navigation_guides = navigation_guides
+        self.platform_sections = platform_sections
+        self.platform_faqs = platform_faqs
+        self.faqs = faqs
+        self.translations = translations
+        self.reasoning_rules = reasoning_rules
+        self.intent_patterns = intent_patterns
+        self.synonyms = synonyms
+        
+        # Initialize user memory and conversation history
+        self.user_memory = {}
+        self.conversation_history = {}
+        
+        # Initialize response cache
+        self.response_cache = {}
+        
         # Initialize NLP tools
         self.lemmatizer = WordNetLemmatizer()
         self.stemmer = SnowballStemmer('english')
@@ -72,9 +99,6 @@ class GamingChatbot:
         
         # Initialize and train the classifier
         self.classifier = self.train_classifier()
-        
-        # Load game data from data.py
-        self.games_data = games_data
         
         # User session memory with enhanced reasoning
         self.user_memories = {}
@@ -99,9 +123,7 @@ class GamingChatbot:
         # Load data from data.py
         self.intent_patterns = intent_patterns
         self.synonyms = synonyms
-        self.game_vocabulary = game_vocabulary
         self.faqs = faqs
-        self.navigation_guides = navigation_guides
         self.challenges = challenges
         self.translations = translations
         self.reasoning_rules = reasoning_rules
@@ -116,149 +138,194 @@ class GamingChatbot:
         
         # If no explicit language request, use keyword detection
         message_lower = message.lower()
-        french_indicators = ['bonjour', 'salut', 'merci', 'jeu', 'prix', 'jouer', 'recommander']
-        english_indicators = ['hello', 'hi', 'thanks', 'game', 'price', 'play', 'recommend']
+        french_indicators = [
+            'bonjour', 'salut', 'merci', 'jeu', 'prix', 'jouer', 'recommander',
+            'quel', 'est', 'le', 'de', 'la', 'les', 'des', 'que', 'quoi', 'comment',
+            'pourquoi', 'où', 'quand', 'qui', 'combien', 'coûte'
+        ]
+        english_indicators = [
+            'hello', 'hi', 'thanks', 'game', 'price', 'play', 'recommend',
+            'what', 'is', 'the', 'of', 'how', 'much', 'where', 'when', 'who',
+            'why', 'which', 'cost'
+        ]
         
         french_count = sum(1 for word in french_indicators if word in message_lower)
         english_count = sum(1 for word in english_indicators if word in message_lower)
         
         # Check for French characters
-        french_chars = set('éèêëàâäôöûüçîï')
+        french_chars = set('éèêëàâäôöûüçîïœæ')
         has_french_chars = any(char in french_chars for char in message)
         
-        if has_french_chars or french_count > english_count:
-            return 'fr'
-        return 'en'
+        # Give extra weight to French characters
+        if has_french_chars:
+            french_count += 2
+            
+        # Check for French question patterns
+        french_patterns = ["qu'est", "qu'est-ce", "est-ce", "qu'il", "est-il"]
+        if any(pattern in message_lower for pattern in french_patterns):
+            french_count += 2
+            
+        return 'fr' if french_count >= english_count else 'en'
 
     def handle_game_info(self, message, language='en'):
         """Handle requests for information about specific games"""
         message = message.lower()
         
-        # First try exact matches
-        for game in self.games_data:
-            if game['title'].lower() in message:
-                return self.format_game_info(game, language)
+        # Common game title variations
+        game_variations = {
+            'gta': 'Grand Theft Auto V',
+            'gta v': 'Grand Theft Auto V',
+            'gta 5': 'Grand Theft Auto V',
+            'gtav': 'Grand Theft Auto V',
+            'grand theft auto': 'Grand Theft Auto V',
+            'minecraft': 'Minecraft',
+            'mincraft': 'Minecraft',
+            'mine craft': 'Minecraft',
+            'fortnite': 'Fortnite'
+        }
         
-        # If no exact match, try partial matches with word sequence matching
-        message_words = message.split()
-        best_match = None
-        max_matching_words = 0
-        max_sequence_length = 0
+        # First try exact matches with variations
+        found_game = None
+        for variation, full_title in game_variations.items():
+            if variation in message:
+                # Find the game in games_data
+                for game in self.games_data:
+                    if game['title'] == full_title:
+                        found_game = game
+                        break
+                if found_game:
+                    break
         
-        for game in self.games_data:
-            game_title_words = game['title'].lower().split()
-            
-            # Check for consecutive word matches
-            for i in range(len(message_words)):
-                for j in range(i + 1, len(message_words) + 1):
-                    phrase = ' '.join(message_words[i:j])
-                    if phrase in game['title'].lower():
-                        sequence_length = j - i
-                        if sequence_length > max_sequence_length:
-                            max_sequence_length = sequence_length
-                            best_match = game
+        # If no match found through variations, try regular matching
+        if not found_game:
+            for game in self.games_data:
+                if game['title'].lower() in message:
+                    found_game = game
+                    break
         
-            # If no sequence match, check individual word matches
-            if not best_match:
-                matching_words = sum(1 for word in message_words if word in game_title_words)
-                if matching_words > max_matching_words:
-                    max_matching_words = matching_words
-                    best_match = game
+        # Special handling for Fortnite (since it's not in games_data)
+        if 'fortnite' in message:
+            if language == 'fr':
+                return ("Fortnite est un jeu de type Battle Royale, développé par Epic Games. "
+                       "C'est un jeu d'action multijoueur où 100 joueurs s'affrontent jusqu'à ce qu'il n'en reste plus qu'un. "
+                       "Le jeu propose un système de construction unique et des événements saisonniers réguliers. "
+                       "\n\nParmi ses caractéristiques principales, on trouve: Battle Royale, Construction, Multijoueur, "
+                       "Événements en direct, et Crossplay. "
+                       "\n\nLe jeu est disponible sur PC, PlayStation, Xbox, Nintendo Switch, et Mobile. "
+                       "\n\nBonne nouvelle : le jeu est totalement gratuit à jouer, bien qu'il propose des achats "
+                       "in-game pour des objets cosmétiques et des pass de combat!")
+            else:
+                return ("Fortnite is a Battle Royale game developed by Epic Games. "
+                       "It's a multiplayer action game where 100 players fight until only one remains. "
+                       "The game features a unique building system and regular seasonal events. "
+                       "\n\nKey features include: Battle Royale, Building, Multiplayer, "
+                       "Live Events, and Crossplay. "
+                       "\n\nThe game is available on PC, PlayStation, Xbox, Nintendo Switch, and Mobile. "
+                       "\n\nGreat news: the game is completely free to play, although it offers "
+                       "in-game purchases for cosmetic items and battle passes!")
         
-        # If we found a match through word sequences or individual matches
-        if best_match:
-            return self.format_game_info(best_match, language)
+        if found_game:
+            return self.format_game_info(found_game, language)
         
-        # If still no match, try fuzzy matching for each word
-        for game in self.games_data:
-            game_title_words = game['title'].lower().split()
-            for msg_word in message_words:
-                if len(msg_word) <= 2:  # Skip very short words
-                    continue
-                for game_word in game_title_words:
-                    if len(game_word) <= 2:  # Skip very short words
-                        continue
-                    if self.are_words_similar(msg_word, game_word):
-                        return self.format_game_info(game, language)
-        
-        # If no match found at all
+        # If no match found
         if language == 'fr':
-            return "Je n'ai pas trouvé ce jeu spécifique. Pourriez-vous vérifier l'orthographe ou essayer un autre titre?"
-        return "I couldn't find that specific game. Could you check the spelling or try another game title?"
+            return "Je n'ai pas trouvé ce jeu. Pourriez-vous vérifier l'orthographe ou essayer un autre titre?"
+        return "I couldn't find that game. Could you check the spelling or try another title?"
 
     def format_game_info(self, game, language='en'):
         """Format game information in a conversational way with language support"""
-        # Introduction
         if language == 'fr':
-            response = f"Laissez-moi vous parler de {game['title']}! "
-            response += f"C'est un jeu de type {' et '.join(game['genre'])} "
+            response = f"{game['title']} est "
+            if len(game['genre']) > 1:
+                response += f"un jeu qui mélange les genres {' et '.join(game['genre'])}, "
+            else:
+                response += f"un jeu de {game['genre'][0]}, "
             response += f"développé par {game['publisher']}. "
             
             # Release and Rating
             response += f"Sorti le {game['release_date']}, "
-            response += f"il a obtenu une note de {game['rating']}/10. "
-            
-            # Price
-            if game['price'] == 0:
-                response += "Le meilleur? C'est totalement gratuit! "
+            if game['rating'] >= 8:
+                response += f"il a reçu d'excellentes critiques avec une note de {game['rating']}/10. "
+            elif game['rating'] >= 6:
+                response += f"il a reçu de bonnes critiques avec une note de {game['rating']}/10. "
             else:
-                response += f"Vous pouvez l'obtenir pour {game['price']:.2f}€. "
+                response += f"il a reçu une note de {game['rating']}/10. "
             
             # Description
             response += f"\n\n{game['description']} "
             
+            # Features
+            if 'tags' in game and game['tags']:
+                response += f"\n\nParmi ses caractéristiques principales, on trouve: "
+                response += f"{', '.join(game['tags'][:-1])}"
+                if len(game['tags']) > 1:
+                    response += f" et {game['tags'][-1]}. "
+                else:
+                    response += f"{game['tags'][0]}. "
+            
             # Platforms
-            response += f"\n\nVous pouvez y jouer sur {', '.join(game['platforms'][:-1])}"
+            response += f"\n\nLe jeu est disponible sur {', '.join(game['platforms'][:-1])}"
             if len(game['platforms']) > 1:
                 response += f" et {game['platforms'][-1]}. "
             else:
                 response += ". "
             
-            # Features
-            if 'tags' in game:
-                response += "\nLes caractéristiques notables incluent: "
-                response += f"{', '.join(game['tags'][:-1])}, et {game['tags'][-1]}. "
-            
-            # Multiplayer
-            if game['multiplayer']:
-                response += "\nEt oui, vous pouvez y jouer avec vos amis car il dispose d'un mode multijoueur!"
+            # Price and Multiplayer
+            if game['price'] == 0:
+                response += "\nBonne nouvelle : le jeu est totalement gratuit"
             else:
-                response += "\nC'est une expérience solo que vous pouvez apprécier à votre rythme."
+                response += f"\nLe jeu est disponible au prix de {game['price']:.2f}€"
+            
+            if game['multiplayer']:
+                response += " et propose un mode multijoueur pour jouer avec vos amis!"
+            else:
+                response += " et offre une expérience solo immersive."
         else:
-            response = f"Let me tell you about {game['title']}! "
-            response += f"It's a {' and '.join(game['genre'])} game "
+            response = f"{game['title']} is "
+            if len(game['genre']) > 1:
+                response += f"a game that combines {' and '.join(game['genre'])}, "
+            else:
+                response += f"a {game['genre'][0]} game, "
             response += f"developed by {game['publisher']}. "
             
             # Release and Rating
             response += f"Released on {game['release_date']}, "
-            response += f"it has earned a strong rating of {game['rating']}/10. "
-            
-            # Price
-            if game['price'] == 0:
-                response += "The best part? It's completely free to play! "
+            if game['rating'] >= 8:
+                response += f"it has received excellent reviews with a rating of {game['rating']}/10. "
+            elif game['rating'] >= 6:
+                response += f"it has received good reviews with a rating of {game['rating']}/10. "
             else:
-                response += f"You can get it for ${game['price']:.2f}. "
+                response += f"it has received a rating of {game['rating']}/10. "
             
             # Description
             response += f"\n\n{game['description']} "
             
+            # Features
+            if 'tags' in game and game['tags']:
+                response += f"\n\nKey features include: "
+                response += f"{', '.join(game['tags'][:-1])}"
+                if len(game['tags']) > 1:
+                    response += f" and {game['tags'][-1]}. "
+                else:
+                    response += f"{game['tags'][0]}. "
+            
             # Platforms
-            response += f"\n\nYou can play it on {', '.join(game['platforms'][:-1])}"
+            response += f"\n\nThe game is available on {', '.join(game['platforms'][:-1])}"
             if len(game['platforms']) > 1:
                 response += f" and {game['platforms'][-1]}. "
             else:
                 response += ". "
             
-            # Features
-            if 'tags' in game:
-                response += "\nSome notable features include: "
-                response += f"{', '.join(game['tags'][:-1])}, and {game['tags'][-1]}. "
-            
-            # Multiplayer
-            if game['multiplayer']:
-                response += "\nAnd yes, you can play this with your friends as it has multiplayer support!"
+            # Price and Multiplayer
+            if game['price'] == 0:
+                response += "\nGreat news: the game is completely free"
             else:
-                response += "\nThis is a single-player experience that you can enjoy at your own pace."
+                response += f"\nThe game is available for ${game['price']:.2f}"
+            
+            if game['multiplayer']:
+                response += " and features multiplayer support to play with your friends!"
+            else:
+                response += " and offers an immersive single-player experience."
         
         return response
 
@@ -303,176 +370,144 @@ class GamingChatbot:
         return distance <= max_distance 
 
     def handle_game_recommendation(self, message, language='en'):
-        """Handle game recommendation requests based on user preferences"""
+        """Handle game recommendation requests"""
+        message = message.lower()
+        
         # Extract preferences from message
         preferences = self.extract_preferences(message)
         
-        # Special handling for free games request
-        message_lower = message.lower()
-        is_free_request = any(word in message_lower for word in ['free', 'gratuit', 'f2p', 'free to play', 'free-to-play'])
+        # Find matching games
+        matching_games = self.find_matching_games(preferences)
         
-        if is_free_request:
-            # Filter only free games
-            free_games = [game for game in self.games_data if game['price'] == 0]
-            if not free_games:
-                if language == 'fr':
-                    return "Désolé, je n'ai pas trouvé de jeux gratuits dans notre base de données pour le moment."
-                return "Sorry, I couldn't find any free games in our database at the moment."
-            
-            # Sort by rating
-            free_games.sort(key=lambda x: x['rating'], reverse=True)
-            
-            # Format response
+        if not matching_games:
             if language == 'fr':
-                response = "Voici quelques jeux gratuits populaires:\n\n"
-                for game in free_games[:3]:
-                    response += f"🎮 {game['title']} - "
-                    response += f"Un jeu {' et '.join(game['genre'])} "
-                    response += f"avec une note de {game['rating']}/10\n"
-                    response += f"📝 {game['description']}\n\n"
-            else:
-                response = "Here are some popular free games:\n\n"
-                for game in free_games[:3]:
-                    response += f"🎮 {game['title']} - "
-                    response += f"A {' and '.join(game['genre'])} game "
-                    response += f"rated {game['rating']}/10\n"
-                    response += f"📝 {game['description']}\n\n"
-            
-            return response
-        
-        # Get matching games for other cases
-        matches = self.find_matching_games(preferences)
-        
-        # Sort matches by relevance score
-        matches.sort(key=lambda x: x[1], reverse=True)
+                return "Je n'ai pas trouvé de jeux correspondant à vos critères. Pourriez-vous me donner plus de détails sur vos préférences?"
+            return "I couldn't find any games matching your criteria. Could you tell me more about your preferences?"
         
         # Format response
-        if not matches:
-            if language == 'fr':
-                return "Je suis désolé, je n'ai pas trouvé de jeux correspondant exactement à vos préférences. Pourriez-vous être plus précis sur ce que vous recherchez?"
-            return "I'm sorry, I couldn't find any games matching your preferences exactly. Could you be more specific about what you're looking for?"
-        
         if language == 'fr':
-            response = "Voici quelques jeux que je pense que vous aimerez:\n\n"
-            for game, score in matches[:3]:
-                response += f"🎮 {game['title']} - "
-                response += f"Un jeu {' et '.join(game['genre'])} "
-                if game['price'] == 0:
-                    response += "qui est gratuit! "
-                else:
-                    response += f"au prix de {game['price']:.2f}€. "
-                response += f"Note: {game['rating']}/10\n"
-                response += f"Description: {game['description']}\n\n"
+            response = "Voici quelques jeux qui pourraient vous intéresser:\n\n"
+            for game in matching_games[:3]:
+                response += f"🎮 {game['title']}\n"
+                response += f"📝 {game['description']}\n"
+                response += f"💰 Prix: {game['price']}€\n"
+                response += f"⭐ Note: {game['rating']}/10\n\n"
         else:
-            response = "Here are some games I think you'll love:\n\n"
-            for game, score in matches[:3]:
-                response += f"🎮 {game['title']} - "
-                response += f"A {' and '.join(game['genre'])} game "
-                if game['price'] == 0:
-                    response += "that's free to play! "
-                else:
-                    response += f"priced at ${game['price']:.2f}. "
-                response += f"Rating: {game['rating']}/10\n"
-                response += f"Description: {game['description']}\n\n"
+            response = "Here are some games you might enjoy:\n\n"
+            for game in matching_games[:3]:
+                response += f"🎮 {game['title']}\n"
+                response += f"📝 {game['description']}\n"
+                response += f"💰 Price: ${game['price']}\n"
+                response += f"⭐ Rating: {game['rating']}/10\n\n"
         
         return response
 
     def extract_preferences(self, message):
-        """Extract user preferences from their message"""
-        preferences = {
-            'genres': set(),
-            'platforms': set(),
-            'price_range': None,
-            'multiplayer': None,
-            'tags': set()
-        }
-        
+        """Extract game preferences from user message"""
+        preferences = {}
         message = message.lower()
         
-        # Extract genres
-        for genre in self.game_vocabulary['genres']:
-            if genre.lower() in message:
-                preferences['genres'].add(genre)
+        # Extract genre preferences
+        genre_keywords = {
+            'survival': ['survival', 'survive', 'survie'],
+            'action': ['action', 'combat', 'fighting'],
+            'rpg': ['rpg', 'role-playing', 'role playing', 'jeu de rôle'],
+            'strategy': ['strategy', 'stratégie', 'tactical', 'tactique'],
+            'sports': ['sports', 'sport', 'football', 'soccer', 'basketball'],
+            'racing': ['racing', 'race', 'course', 'driving', 'conduite'],
+            'horror': ['horror', 'horreur', 'scary', 'effrayant'],
+            'adventure': ['adventure', 'aventure', 'exploration'],
+            'puzzle': ['puzzle', 'puzzles', 'énigmes', 'réflexion'],
+            'simulation': ['simulation', 'simulator', 'simulateur']
+        }
         
-        # Extract platforms
-        for platform in self.game_vocabulary['platforms']:
-            if platform.lower() in message:
-                preferences['platforms'].add(platform)
+        # Find mentioned genres
+        mentioned_genres = []
+        for genre, keywords in genre_keywords.items():
+            if any(keyword in message for keyword in keywords):
+                mentioned_genres.append(genre.title())
         
-        # Extract price range - enhanced free game detection
-        free_indicators = {'free', 'gratuit', 'f2p', 'free to play', 'free-to-play', 'no cost', 'zero cost'}
-        if any(indicator in message for indicator in free_indicators) or 'free games' in message or 'free game' in message:
-            preferences['price_range'] = (0, 0)
-        elif any(word in message for word in ['cheap', 'pas cher', 'budget']):
-            preferences['price_range'] = (0, 20)
+        if mentioned_genres:
+            preferences['genre'] = mentioned_genres
+        
+        # Extract platform preferences
+        platform_keywords = {
+            'pc': ['pc', 'computer', 'desktop', 'windows', 'ordinateur'],
+            'playstation': ['ps4', 'ps5', 'playstation', 'sony'],
+            'xbox': ['xbox', 'microsoft'],
+            'switch': ['switch', 'nintendo'],
+            'mobile': ['mobile', 'phone', 'android', 'ios', 'iphone', 'smartphone']
+        }
+        
+        mentioned_platforms = []
+        for platform, keywords in platform_keywords.items():
+            if any(keyword in message for keyword in keywords):
+                mentioned_platforms.append(platform)
+        
+        if mentioned_platforms:
+            preferences['platform'] = mentioned_platforms
+        
+        # Extract price range preferences
+        if any(word in message for word in ['free', 'gratuit']):
+            preferences['price_range'] = 'free'
+        elif any(word in message for word in ['cheap', 'pas cher', 'bon marché']):
+            preferences['price_range'] = 'cheap'
         elif any(word in message for word in ['expensive', 'cher', 'premium']):
-            preferences['price_range'] = (40, float('inf'))
+            preferences['price_range'] = 'expensive'
         
         # Extract multiplayer preference
-        if any(word in message for word in ['multiplayer', 'multijoueur', 'with friends', 'avec amis']):
+        if any(word in message for word in ['multiplayer', 'multi', 'coop', 'co-op', 'multijoueur']):
             preferences['multiplayer'] = True
         elif any(word in message for word in ['single player', 'solo', 'alone', 'seul']):
             preferences['multiplayer'] = False
-        
-        # Extract features/tags
-        for feature in self.game_vocabulary['features']:
-            if feature.lower() in message:
-                preferences['tags'].add(feature)
         
         return preferences
 
     def find_matching_games(self, preferences):
         """Find games matching the given preferences"""
-        matches = []
-        
-        # Special handling for free games request
-        message_indicates_free = bool(preferences.get('price_range') == (0, 0))
+        matching_games = []
         
         for game in self.games_data:
-            score = 0
+            # Check if game matches all preferences
+            matches = True
             
-            # If user specifically asked for free games, only include free games
-            if message_indicates_free and game['price'] != 0:
-                continue
+            # Check genre
+            if 'genre' in preferences and preferences['genre']:
+                game_genres = [g.lower() for g in game['genre']]
+                if not any(g.lower() in game_genres for g in preferences['genre']):
+                    matches = False
             
-            # Genre matching
-            if preferences['genres']:
-                genre_match = len(set(game['genre']) & preferences['genres'])
-                score += genre_match * 2  # Weight genre matches heavily
+            # Check platform
+            if 'platform' in preferences and preferences['platform']:
+                if not any(p.lower() in [plat.lower() for plat in game['platforms']] 
+                          for p in preferences['platform']):
+                    matches = False
             
-            # Platform matching
-            if preferences['platforms']:
-                platform_match = len(set(game['platforms']) & preferences['platforms'])
-                score += platform_match
+            # Check price range
+            if 'price_range' in preferences:
+                price = float(game['price'])
+                if preferences['price_range'] == 'free' and price > 0:
+                    matches = False
+                elif preferences['price_range'] == 'cheap' and price > 20:
+                    matches = False
+                elif preferences['price_range'] == 'medium' and (price < 20 or price > 40):
+                    matches = False
+                elif preferences['price_range'] == 'expensive' and price < 40:
+                    matches = False
             
-            # Price range matching
-            if preferences['price_range'] is not None:
-                min_price, max_price = preferences['price_range']
-                if min_price <= game['price'] <= max_price:
-                    score += 1
+            # Check multiplayer preference
+            if 'multiplayer' in preferences:
+                if preferences['multiplayer'] != game['multiplayer']:
+                    matches = False
             
-            # Multiplayer matching
-            if preferences['multiplayer'] is not None:
-                if game['multiplayer'] == preferences['multiplayer']:
-                    score += 1
-            
-            # Tag matching
-            if preferences['tags'] and 'tags' in game:
-                tag_match = len(preferences['tags'] & set(game['tags']))
-                score += tag_match
-            
-            # Rating bonus
-            score += game['rating'] / 20  # Small bonus for higher-rated games
-            
-            # For free games request, give extra score to free games
-            if message_indicates_free and game['price'] == 0:
-                score += 3  # Significant boost for free games
-            
-            # Only include games with some matching criteria
-            if score > 0:
-                matches.append((game, score))
+            # Add game if it matches all criteria
+            if matches:
+                matching_games.append(game)
         
-        return matches
+        # Sort by rating
+        matching_games.sort(key=lambda x: float(x['rating']), reverse=True)
+        
+        return matching_games
 
     def update_user_preferences(self, user_id, game_interaction):
         """Update user preferences based on their interactions with games"""
@@ -773,58 +808,95 @@ class GamingChatbot:
         """Handle challenge-related inquiries"""
         message = message.lower()
         
-        # Check for game-specific challenges
-        game_specific = None
-        for game in self.games_data:
-            if game['title'].lower() in message:
-                game_specific = game['title']
+        # Check for language override first
+        if 'in english' in message or 'en anglais' in message:
+            language = 'en'
+        elif 'in french' in message or 'en français' in message:
+            language = 'fr'
+        else:
+            # If no explicit override, check message language
+            french_indicators = ['défi', 'donnez-moi', 'donner', 'défi']
+            english_indicators = ['challenge', 'give me', 'get', 'want']
+            
+            french_count = sum(1 for word in french_indicators if word in message)
+            english_count = sum(1 for word in english_indicators if word in message)
+            
+            # Override language based on message content
+            if french_count > english_count:
+                language = 'fr'
+            elif english_count > french_count:
+                language = 'en'
+            # else: keep the provided language parameter
+        
+        # Game variations mapping
+        game_variations = {
+            'minecraft': ['minecraft', 'mincraft', 'mine craft'],
+            'fortnite': ['fortnite', 'fortnight', 'fort nite'],
+            'gta': ['gta', 'grand theft auto', 'gta v', 'gta 5'],
+            'cod': ['call of duty', 'cod', 'modern warfare', 'warzone']
+        }
+        
+        # Extract game name if specified
+        game_name = None
+        game_genre = None
+        
+        # Check for game variations first
+        for game, variations in game_variations.items():
+            if any(var in message for var in variations):
+                game_name = game.title()  # Capitalize first letter
                 break
         
-        # Special handling for Fortnite since it's not in games_data
-        if 'fortnite' in message.lower():
-            game_specific = 'Fortnite'
+        # If no match found through variations, try direct game matching
+        if not game_name:
+            for game in self.games_data:
+                if game['title'].lower() in message:
+                    game_name = game['title']
+                    game_genre = game['genre'][0]  # Use the primary genre
+                    break
         
-        # Get available challenges
-        available_challenges = []
+        # Get the challenge based on game or genre
+        challenge = None
         
-        # Add general challenges
-        available_challenges.extend(self.challenges['general'])
+        # If we found a specific game with challenges
+        if game_name and game_name.lower() in [g.lower() for g in self.challenges['game_specific'].keys()]:
+            challenges = self.challenges['game_specific'][game_name]
+            challenge = random.choice(challenges)
         
-        # Add game-specific challenges if applicable
-        if game_specific and game_specific in self.challenges['game_specific']:
-            available_challenges.extend(self.challenges['game_specific'][game_specific])
+        # Special handling for game genres
+        elif game_name:
+            # Map games to their genres
+            genre_mapping = {
+                'Minecraft': 'Survival',
+                'Fortnite': 'Battle Royale',
+                'GTA': 'Action',
+                'COD': 'FPS'
+            }
+            
+            if game_name in genre_mapping:
+                genre = genre_mapping[game_name]
+                if genre in self.challenges['genre_specific']:
+                    challenges = self.challenges['genre_specific'][genre]
+                    challenge = random.choice(challenges)
         
-        # Format and return challenges
-        if not available_challenges:
-            if language == 'fr':
-                return f"Désolé, je n'ai pas trouvé de défis{'pour ' + game_specific if game_specific else ''} pour le moment. Revenez bientôt!"
-            return f"Sorry, I couldn't find any challenges{'for ' + game_specific if game_specific else ''} at the moment. Check back soon!"
+        # If no specific game or genre challenge found, get a general challenge
+        if not challenge:
+            challenge = random.choice(self.challenges['general'])
         
-        # Format response
+        # Format the response
         if language == 'fr':
-            response = f"Voici les défis disponibles"
-            if game_specific:
-                response += f" pour {game_specific}"
-            response += ":\n\n"
-            
-            for challenge in available_challenges:
-                response += f"🎯 {challenge['name']['fr']}\n"
-                response += f"📝 {challenge['description']['fr']}\n"
-                if 'difficulty' in challenge:
-                    response += f"💪 Difficulté: {challenge['difficulty']}\n"
-                response += f"🏆 Récompense: {challenge['reward']['fr']}\n\n"
+            response = "🎯 Voici votre défi:\n\n"
+            response += f"📋 {challenge['name']['fr']}\n"
+            response += f"ℹ️ {challenge['description']['fr']}\n"
+            if 'difficulty' in challenge:
+                response += f"⭐ Difficulté: {challenge['difficulty']}\n"
+            response += f"🏆 Récompense: {challenge['reward']['fr']}"
         else:
-            response = f"Here are the available challenges"
-            if game_specific:
-                response += f" for {game_specific}"
-            response += ":\n\n"
-            
-            for challenge in available_challenges:
-                response += f"🎯 {challenge['name']['en']}\n"
-                response += f"📝 {challenge['description']['en']}\n"
-                if 'difficulty' in challenge:
-                    response += f"💪 Difficulty: {challenge['difficulty']}\n"
-                response += f"🏆 Reward: {challenge['reward']['en']}\n\n"
+            response = "🎯 Here's your challenge:\n\n"
+            response += f"📋 {challenge['name']['en']}\n"
+            response += f"ℹ️ {challenge['description']['en']}\n"
+            if 'difficulty' in challenge:
+                response += f"⭐ Difficulty: {challenge['difficulty']}\n"
+            response += f"🏆 Reward: {challenge['reward']['en']}"
         
         return response
 
@@ -1266,21 +1338,220 @@ class GamingChatbot:
             return "Bonjour! Je suis votre assistant IA et je peux vous aider à trouver des jeux, répondre à vos questions, fournir du support, ou même suggérer des défis amusants. Comment puis-je vous aider aujourd'hui?"
         return "Hello! I'm your AI assistant and I can help you find games, answer questions, provide support, or even suggest fun challenges. How can I help you today?"
 
-    def respond(self, session_id, message):
-        """Generate a response to the user's message"""
+    def process_message(self, message):
+        """Process user message and return appropriate response"""
+        # Store original message for history
+        original_message = message
+        message_lower = message.lower()
+        
         # Detect language
         language = self.detect_language(message)
+        
+        # First, check for FAQ-related queries
+        faq_patterns = [
+            'how to', 'comment', 'what is', 'qu\'est-ce que', 'help with', 'aide avec',
+            'how do i', 'how can i', 'comment puis-je', 'comment faire pour'
+        ]
+        
+        # Account-related patterns
+        account_patterns = [
+            'create account', 'créer compte', 'delete account', 'supprimer compte',
+            'change password', 'changer mot de passe', 'update email', 'mettre à jour email',
+            'payment method', 'méthode de paiement', 'refund', 'remboursement',
+            'subscription', 'abonnement', 'download', 'télécharger', 'install', 'installer',
+            'create', 'créer', 'sign up', "s'inscrire", 'register', 'inscription'
+        ]
+        
+        # Navigation patterns
+        navigation_patterns = [
+            'where is', 'où est', 'find', 'trouver', 'access', 'accéder',
+            'go to', 'aller à', 'get to', 'navigate to', 'naviguer vers'
+        ]
+        
+        # If it's a FAQ about account/settings/etc.
+        if (any(pattern in message_lower for pattern in faq_patterns) and 
+            any(pattern in message_lower for pattern in account_patterns)) or \
+           any(pattern in message_lower for pattern in ['create account', 'créer compte', 'sign up', "s'inscrire"]):
+            return self.handle_platform_faq(message, language)
+        
+        # If it's a navigation query
+        if any(pattern in message_lower for pattern in navigation_patterns) or \
+           any(section in message_lower for section in ['profile', 'profil', 'chat', 'store', 'boutique', 'forums', 'library', 'bibliothèque']):
+            return self.handle_navigation(message, language)
+        
+        # Check for challenge-related queries
+        if any(word in message_lower for word in ['challenge', 'défi', 'achievement', 'mission']):
+            return self.handle_challenges(message, language)
+        
+        # Check for game-specific queries
+        for game in self.games_data:
+            if game['title'].lower() in message_lower:
+                return self.handle_game_info(message, language)
+        
+        # Special handling for Fortnite
+        if 'fortnite' in message_lower:
+            return self.handle_game_info(message, language)
+        
+        # If no specific intent is detected, provide a general help message
+        if language == 'fr':
+            return ("Je peux vous aider à naviguer sur la plateforme, trouver des jeux, "
+                   "ou répondre à vos questions. Que souhaitez-vous faire?")
+        return ("I can help you navigate the platform, find games, "
+               "or answer your questions. What would you like to do?")
+
+    def handle_navigation(self, message, language='en'):
+        """Handle navigation-related inquiries about the platform"""
+        message = message.lower()
+        
+        # Extract the section the user is looking for
+        sections = {
+            'profile': ['profile', 'profil', 'account', 'compte'],
+            'chat': ['chat', 'message', 'messages', 'messaging'],
+            'store': ['store', 'boutique', 'shop', 'magasin'],
+            'forums': ['forum', 'forums', 'discussion'],
+            'browse': ['browse', 'parcourir', 'discover', 'découvrir'],
+            'library': ['library', 'bibliothèque', 'games', 'jeux'],
+            'news': ['news', 'actualités', 'updates', 'mises à jour']
+        }
+        
+        # Find which section the user is asking about
+        target_section = None
+        for section, keywords in sections.items():
+            if any(keyword in message for keyword in keywords):
+                target_section = section
+                break
+        
+        if target_section and target_section in self.navigation_guides['platform']:
+            section_info = self.navigation_guides['platform'][target_section][language]
+            if language == 'fr':
+                return f"📍 Pour accéder à cette section : {section_info['path']}\n\n💡 {section_info['description']}"
+            return f"📍 To access this section: {section_info['path']}\n\n💡 {section_info['description']}"
+        
+        # If no specific section is found, provide general navigation help
+        if language == 'fr':
+            return ("Je peux vous aider à naviguer sur la plateforme. Voici les sections principales :\n"
+                   "👤 Profil - Gérez votre compte\n"
+                   "💬 Messages - Chattez avec d'autres joueurs\n"
+                   "🎮 Boutique - Parcourez et achetez des jeux\n"
+                   "📢 Forums - Participez aux discussions\n"
+                   "📚 Bibliothèque - Accédez à vos jeux\n"
+                   "📰 Actualités - Restez informé\n\n"
+                   "Quelle section vous intéresse ?")
+        return ("I can help you navigate the platform. Here are the main sections:\n"
+                "👤 Profile - Manage your account\n"
+                "💬 Messages - Chat with other players\n"
+                "🎮 Store - Browse and buy games\n"
+                "📢 Forums - Join discussions\n"
+                "📚 Library - Access your games\n"
+                "📰 News - Stay updated\n\n"
+                "Which section are you interested in?")
+
+    def handle_platform_faq(self, message, language='en'):
+        """Handle platform-related FAQs"""
+        message = message.lower()
+        
+        # Define categories and their keywords
+        categories = {
+            'account': ['account', 'compte', 'password', 'mot de passe', 'email', 'delete', 'supprimer', 'create', 'créer'],
+            'payment': ['payment', 'paiement', 'refund', 'remboursement', 'subscription', 'abonnement'],
+            'technical': ['download', 'télécharger', 'install', 'installer', 'update', 'mise à jour']
+        }
+        
+        # Find the category
+        category = None
+        for cat, keywords in categories.items():
+            if any(keyword in message for keyword in keywords):
+                category = cat
+                break
+        
+        if not category:
+            # If no specific category is found, provide general help
+            if language == 'fr':
+                return ("Je peux vous aider avec :\n"
+                       "👤 Compte - création, suppression, mot de passe\n"
+                       "💳 Paiement - méthodes, remboursements, abonnements\n"
+                       "🔧 Technique - téléchargement, installation, mises à jour\n\n"
+                       "Quelle catégorie vous intéresse ?")
+            return ("I can help you with:\n"
+                   "👤 Account - creation, deletion, password\n"
+                   "💳 Payment - methods, refunds, subscriptions\n"
+                   "🔧 Technical - downloads, installation, updates\n\n"
+                   "Which category are you interested in?")
+        
+        # Find the specific topic within the category
+        topics = {
+            'account': {
+                'create': ['create', 'créer', 'sign up', "s'inscrire"],
+                'delete': ['delete', 'supprimer', 'remove', 'effacer'],
+                'password': ['password', 'mot de passe'],
+                'email': ['email', 'e-mail', 'mail']
+            },
+            'payment': {
+                'methods': ['method', 'méthode', 'payment', 'paiement', 'pay', 'payer'],
+                'refund': ['refund', 'remboursement', 'return', 'retour'],
+                'subscription': ['subscription', 'abonnement', 'subscribe', "s'abonner"]
+            },
+            'technical': {
+                'download': ['download', 'télécharger', 'get game', 'obtenir jeu'],
+                'install': ['install', 'installer', 'setup', 'configurer'],
+                'update': ['update', 'mise à jour', 'patch', 'upgrade']
+            }
+        }
+        
+        topic = None
+        for t, keywords in topics[category].items():
+            if any(keyword in message for keyword in keywords):
+                topic = t
+                break
+        
+        # If no specific topic is found, use the first topic in the category
+        if not topic:
+            topic = list(topics[category].keys())[0]
+        
+        # Get the FAQ response
+        try:
+            return self.platform_faqs[language][category][topic]
+        except KeyError:
+            # Fallback to English if the language or category/topic combination doesn't exist
+            return self.platform_faqs['en'][category][topic]
+
+    def respond(self, session_id, message):
+        """Generate a response to the user's message"""
+        # Store original message
         original_message = message
+        message_lower = message.lower()
         
-        # Check if this is a language change request for the previous response
-        if any(phrase in message.lower() for phrase in ['in french', 'en français', 'in english', 'en anglais']):
-            if self.conversation_history:
-                # Get the previous message and its intent
-                prev_message = self.conversation_history[-1]['user']
-                intent = self.classifier.predict([prev_message.lower()])[0]
+        # Check for language override first
+        if 'in english' in message_lower or 'en anglais' in message_lower:
+            language = 'en'
+        elif 'in french' in message_lower or 'en français' in message_lower:
+            language = 'fr'
+        else:
+            # Detect language if no explicit override
+            language = self.detect_language(message)
         
-        # Check for greetings first
-        if re.match(self.intent_patterns['greeting'], message.lower()):
+        # First, check for navigation-related queries
+        navigation_patterns = [
+            'how to access', 'how do i access', 'where is', 'comment accéder',
+            'où est', 'how to find', 'comment trouver', 'access', 'accéder',
+            'profile', 'profil', 'chat', 'messages', 'store', 'boutique',
+            'forums', 'library', 'bibliothèque', 'news', 'actualités'
+        ]
+        
+        # If it's a navigation query, handle it first
+        if any(pattern in message_lower for pattern in navigation_patterns):
+            return self.handle_navigation(message, language)
+        
+        # Check for challenges
+        if any(word in message_lower for word in ['challenge', 'défi', 'achievement', 'mission']):
+            return self.handle_challenges(message, language)
+        
+        # Check for game recommendations
+        if any(word in message_lower for word in ['recommend', 'suggest', 'suggérer', 'recommander', 'conseiller']):
+            return self.handle_game_recommendation(message, language)
+        
+        # Check for greetings
+        if re.match(self.intent_patterns['greeting'], message_lower):
             return self.handle_greeting(message, language)
         
         # Check cache for identical query
@@ -1300,29 +1571,14 @@ class GamingChatbot:
         
         # Update conversation history
         self.conversation_history.append({
-            'user': original_message,  # Store the original message
+            'user': original_message,
             'timestamp': time.time()
         })
         if len(self.conversation_history) > self.context_window:
             self.conversation_history.pop(0)
         
-        # Classify intent
-        intent = self.classifier.predict([message.lower()])[0]
-        
-        # Generate response based on intent
-        if intent == 'game_recommendation':
-            response = self.handle_game_recommendation(message, language)
-        elif intent == 'game_info':
-            response = self.handle_game_info(message, language)
-        elif intent == 'technical_support':
-            response = self.handle_technical_support(message, language)
-        elif intent == 'price':
-            response = self.handle_price(message, language)
-        elif intent == 'community':
-            response = self.handle_community(message, language)
-        else:
-            # Default to FAQ handling
-            response = self.handle_faq(message, language)
+        # Process the message using process_message
+        response = self.process_message(message)
         
         # Update cache
         self.response_cache[cache_key] = (time.time(), response)
