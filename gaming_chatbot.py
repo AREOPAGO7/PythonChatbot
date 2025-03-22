@@ -1189,125 +1189,53 @@ class GamingChatbot:
         ]) 
 
     def handle_price(self, message, language='en'):
-        """Handle price-related inquiries"""
+        """Handle price-related inquiries with concise responses"""
         message = message.lower()
         
-        # Common game title patterns and their variations
-        common_patterns = {
-            'god of war': ['gow', 'godofwar', 'god war'],
-            'fortnite': ['fort', 'fortnight', 'forttnite', 'fortnit'],
+        # Common game title variations
+        game_variations = {
             'minecraft': ['mine craft', 'mincraft', 'mcraft'],
-            'counter strike': ['cs', 'csgo', 'cs:go', 'counter-strike'],
-            'grand theft auto': ['gta', 'grandtheftauto'],
-            'call of duty': ['cod', 'callofduty', 'call duty'],
-            'league of legends': ['lol', 'leagueoflegends', 'league'],
-            'playerunknown\'s battlegrounds': ['pubg', 'battlegrounds'],
-            'world of warcraft': ['wow', 'worldofwarcraft']
+            'fortnite': ['fort', 'fortnight', 'forttnite', 'fortnit'],
+            'gta': ['gta', 'grand theft auto', 'gta v', 'gta 5']
         }
         
-        # Special handling for known free-to-play games
-        free_to_play_games = {
-            'fortnite': {
-                'en': "Fortnite is a free-to-play game! While it offers in-game purchases for cosmetic items and battle passes, the core game is completely free to download and play.",
-                'fr': "Fortnite est un jeu gratuit! Bien qu'il propose des achats in-game pour des objets cosmétiques et des pass de combat, le jeu de base est totalement gratuit à télécharger et à jouer."
-            }
-        }
-        
-        # Extract potential game title from price query
-        # Common price-related words to remove
-        price_words = {'price', 'cost', 'how', 'much', 'is', 'the', 'of', 'for', 'prix', 'coût', 'combien', 'coûte', 'le', 'de', 'du', 'give', 'me', 'tell', 'show'}
+        # Extract game title from message
+        price_words = {'price', 'cost', 'how much', 'combien', 'coûte', 'prix'}
         words = message.split()
-        # Remove price-related words to isolate the game title
         game_title_words = [word for word in words if word.lower() not in price_words]
         potential_title = ' '.join(game_title_words).strip()
         
-        # Create variations of the potential title
-        message_variations = {
-            potential_title,  # Original extracted title
-            potential_title.replace(" ", ""),  # No spaces
-            potential_title.replace("-", " "),  # Replace hyphens with spaces
-            potential_title.replace("_", " "),  # Replace underscores with spaces
-        }
-        
-        # Add common variations based on patterns
-        for base_title, variations in common_patterns.items():
-            if any(var in potential_title for var in [base_title] + variations):
-                message_variations.update(variations)
-                message_variations.add(base_title)
-        
-        # Remove empty strings and normalize
-        message_variations = {v.lower() for v in message_variations if v}
-        
-        # Check for free-to-play games first
-        for game, responses in free_to_play_games.items():
-            if any(game in variation or variation in game for variation in message_variations):
-                return responses[language]
-        
-        # Try to find the game in our database
-        best_match = None
-        min_distance = float('inf')
-        
-        for game in self.games_data:
-            game_title = game['title'].lower()
-            
-            # Create variations of the game title
-            game_variations = {
-                game_title,  # Original title
-                game_title.replace(" ", ""),  # No spaces
-                game_title.replace("-", " "),  # Replace hyphens with spaces
-                game_title.replace("_", " ")  # Replace underscores with spaces
-            }
-            
-            # Add common variations for this game
-            for base_title, variations in common_patterns.items():
-                if base_title in game_title or any(var in game_title for var in variations):
-                    game_variations.update(variations)
-                    game_variations.add(base_title)
-            
-            # Try exact matches first (including partial matches)
-            if any(game_var in msg_var or msg_var in game_var 
-                   for game_var in game_variations
-                   for msg_var in message_variations):
-                best_match = game
-                break
-            
-            # Try partial word matches
-            game_words = set(game_title.split())
-            for variation in message_variations:
-                variation_words = set(variation.split())
-                if variation_words.issubset(game_words) or game_words.issubset(variation_words):
-                    best_match = game
+        # First try exact matches with variations
+        found_game = None
+        for game_name, variations in game_variations.items():
+            if any(var in potential_title for var in variations):
+                # Find the game in games_data
+                for game in self.games_data:
+                    if game['title'].lower() == game_name:
+                        found_game = game
+                        break
+                if found_game:
                     break
-            
-            if best_match:
-                break
-            
-            # If still no match, try fuzzy matching
-            for msg_var in message_variations:
-                if len(msg_var) < 3:  # Skip very short variations
-                    continue
-                for game_var in game_variations:
-                    distance = self.calculate_levenshtein_distance(msg_var, game_var)
-                    normalized_distance = distance / max(len(msg_var), len(game_var))
-                    threshold = 0.4 if len(msg_var) > 5 else 0.3
-                    if normalized_distance < min_distance and normalized_distance <= threshold:
-                        min_distance = normalized_distance
-                        best_match = game
         
-        # If we found a match
-        if best_match:
+        # If no match found through variations, try regular matching
+        if not found_game:
+            for game in self.games_data:
+                if game['title'].lower() in potential_title:
+                    found_game = game
+                    break
+        
+        # Special handling for Fortnite
+        if 'fortnite' in potential_title:
             if language == 'fr':
-                if best_match['price'] == 0:
-                    return f"{best_match['title']} est gratuit!"
-                else:
-                    return f"{best_match['title']} coûte {best_match['price']:.2f}€."
-            else:
-                if best_match['price'] == 0:
-                    return f"{best_match['title']} is free to play!"
-                else:
-                    return f"{best_match['title']} costs ${best_match['price']:.2f}."
+                return "Fortnite est gratuit!"
+            return "Fortnite is free to play!"
         
-        # If no specific game is found
+        if found_game:
+            if language == 'fr':
+                return f"{found_game['title']} coûte {found_game['price']:.2f}€."
+            return f"{found_game['title']} costs ${found_game['price']:.2f}."
+        
+        # If no game found
         if language == 'fr':
             return "Je n'ai pas trouvé le jeu dont vous parlez. Pourriez-vous vérifier l'orthographe du titre?"
         return "I couldn't find the game you're asking about. Could you check the spelling of the title?"
@@ -1340,12 +1268,16 @@ class GamingChatbot:
 
     def process_message(self, message):
         """Process user message and return appropriate response"""
-        # Store original message for history
         original_message = message
         message_lower = message.lower()
         
         # Detect language
         language = self.detect_language(message)
+        
+        # Check for price-related inquiries first
+        price_indicators = ['price', 'cost', 'how much', 'combien', 'coûte', 'prix']
+        if any(indicator in message_lower for indicator in price_indicators):
+            return self.handle_price(message, language)
         
         # First, check for FAQ-related queries
         faq_patterns = [
