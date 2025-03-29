@@ -91,7 +91,7 @@ class GamingChatbot:
         
         # Initialize ML models
         self.sentiment_analyzer = pipeline("sentiment-analysis", model="distilbert-base-uncased-finetuned-sst-2-english") 
-        self.zero_shot_classifier = pipeline("zero-shot-classification", model="facebook/bart-large-mnli")
+        self.zero_shot_classifier = pipeline("zero-shot-classification", model="cross-encoder/nli-distilroberta-base", device=-1)
         self.sentence_transformer = SentenceTransformer('all-MiniLM-L6-v2')
         
         # Load or create training data
