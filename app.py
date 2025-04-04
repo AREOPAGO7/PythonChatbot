@@ -4,7 +4,9 @@ from gaming_chatbot import GamingChatbot
 import uuid
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "https://play-verse-lemon.vercel.app"}})  # Enable CORS for all routes
+
+# Allow requests from all origins
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # Initialize the chatbot
 chatbot = GamingChatbot()
@@ -49,4 +51,4 @@ def new_session():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False) 
+    app.run(host='0.0.0.0', port=5000, debug=False)
